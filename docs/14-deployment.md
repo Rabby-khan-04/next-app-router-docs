@@ -1,0 +1,333 @@
+# 14-deployment.md
+
+---
+
+## 1. Simple Explanation (Like I'm 7)
+
+Deployment is like moving your app from your computer to the real world where people can use it. Next.js makes this easy with different options.
+
+Think of these methods:
+
+- **`next build`** — Like packing your suitcase. It compiles your app into static files and puts them in the `.next` folder.
+- **`next start`** — Like opening your suitcase and running the app on a server. Uses Node.js to serve the compiled app.
+- **Standalone output** — Like packing everything into a single box so you don't need Node.js on the server. The app can run directly on any Node.js server.
+- **Docker** — Like putting your app in a shipping container. It runs the same way on any computer. Isolated, consistent, easy to scale.
+- **Vercel** — The company behind Next.js. Just connect your GitHub repo and it deploys automatically. Free for hobby projects.
+- **Environment variables** — Like putting secret keys in a locked box. `NEXT_PUBLIC_` vars leak to the browser; others stay on the server.
+- **Self-hosting** — Like running your own server in your office. You have full control, but you also handle updates, backups, and security.
+
+Rule: Choose the deployment method that matches your needs. Vercel for simplicity, Docker for consistency, self-hosting for full control.
+
+---
+
+## 2. Real Name
+
+| Term | Technical Description |
+|------|----------------------|
+| **`next build`** | Compiles the Next.js app into static assets and server-side rendering code. Output goes to the `.next/` folder. Must be run before `next start`. |
+| **`next start`** | Starts the production server using the compiled `.next/` output. Runs on Node.js. For development-like production use. |
+| **Standalone output** | `next build` with `output: 'standalone'` in `next.config.ts`. Generates a `.next/standalone/` folder with a minimal Node.js server that can run without the full `.next/` folder. Enables `next start` without the build artifacts. |
+| **Docker** | Containerization platform. Uses a `Dockerfile` to containerize the Next.js app. `node:18-alpine` or `node:20` base image. `next start` runs inside the container. |
+| **Vercel** | Cloud platform by Vercel Inc. for Next.js apps. Connect GitHub/GitLab/Bitbucket repo, and every push triggers a `next build` + `next start`. Free tier available. |
+| **Environment variables** | `process.env.VAR_NAME` accessed in code. ` NEXT_PUBLIC_VAR` prefix makes the variable accessible to browser JavaScript. **Never** put secrets (DB passwords, JWT secrets) under `NEXT_PUBLIC_`. |
+| **`next.config.js`** | Configuration file for Next.js. Can be `next.config.js` at the root or `next.config.ts` with TypeScript. Controls `images`, `env`, `output`, `experimental`, etc. |
+| **Self-hosting** | Running the Next.js production server on your own infrastructure (VPS, dedicated server, on-premises). Uses `next start` or a process manager (PM2, systemd). |
+
+**Version note for Next.js 16.4.3:** The `output` option in `next.config.ts` can be `'standalone'`, `'export'`, or omitted (default, hybrid serverless). The `images` config supports `domains`, `remotePatterns`, and `dangerouslyAllowSVG`. Environment variables with `NEXT_PUBLIC_` prefix are automatically exposed to the client.
+
+---
+
+## 3. Example
+
+Let me set up deployment examples.
+
+### File: `next.config.ts` — Updated Configuration
+
+```ts
+next.config.ts
+```
+
+```ts
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  /* config options here */
+  cacheComponents: true,
+  partialPrefetching: true,
+  // Uncomment for standalone output (runs with just `next start`, no .next folder needed)
+  // output: 'standalone',
+  // Uncomment for static export (generates HTML only, no server needed)
+  // output: 'export',
+  images: {
+    domains: ["localhost", "example.com"],
+    // remotePatterns: [
+    //   {
+    //     protocol: "http:",
+    //     hostname: "**",
+    //   },
+    // ],
+  },
+  // experimental: {
+  //   appDir: true,
+  //   // Turbopack: default in Next 16
+  // },
+};
+
+export default nextConfig;
+```
+
+---
+
+### File: `dockerfile` — Docker Deployment
+
+```dockerfile
+dockerfile
+```
+
+```dockerfile
+# Dockerfile for Next.js App
+# Stage 1: Build the app
+FROM node:20-alpine AS builder
+
+# Set working directory
+WORKDIR /app
+
+# Install dependencies
+COPY package.json package-lock.json ./
+RUN npm install
+
+# Copy source code
+COPY . .
+
+# Build the app
+RUN npm run build
+
+# Stage 2: Run the app
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Copy only the standalone output (if using output: 'standalone')
+# If not using standalone, copy .next/standalone or .next/static etc.
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/package.json ./
+
+# Start the app
+RUN npm install --production
+
+EXPOSE 3000
+
+CMD ["node", "server.js"]
+```
+
+**Note:** If using `output: 'standalone'`, the server.js is generated by Next.js. If not using standalone, you'd copy the entire `.next/` folder and use a different start command.
+
+---
+
+### File: `vercel.json` — Vercel Deployment
+
+```vercel.json
+vercel.json
+```
+
+```json
+{
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next/standalone",
+  "functions": {
+    "api/*": {
+      "maxDuration": 30
+    }
+  },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Note:** Vercel auto-detects Next.js apps. This `vercel.json` configures the build output to use standalone mode and sets some security headers.
+
+---
+
+### File: `src/app/env/page.tsx` — Environment Variables
+
+```tsx
+src/app/env/page.tsx
+```
+
+```tsx
+// Environment variables — how to use them safely
+
+// 1. Public variables — accessible in browser
+//    Prefix with NEXT_PUBLIC_ in .env or env.local
+//    Example: NEXT_PUBLIC_APP_NAME=My App
+
+// 2. Private variables — only accessible on server
+//    No prefix. Example: DATABASE_URL, JWT_SECRET
+//    Example: DATABASE_URL=postgresql://user:pass@localhost/db
+
+export default function EnvPage() {
+  // These are public and accessible to client JavaScript
+  const publicName = process.env.NEXT_PUBLIC_APP_NAME || "My App";
+
+  // Private variables are only available in Server Components
+  // and route handlers — they won't be bundled into the client side.
+
+  return (
+    <main className="py-12 px-4 max-w-2xl mx-auto">
+      <h1 className="text-3xl font-bold mb-4">Environment Variables</h1>
+      <p className="text-zinc-600">
+        Check the terminal (dev server) for process.env values. Public vars
+        are readable in the browser; private vars are not.
+      </p>
+
+      <div className="mt-6 p-4 border rounded bg-zinc-100">
+        <strong>NEXT_PUBLIC_APP_NAME:</strong> {publicName}
+      </div>
+
+      <p className="mt-4 text-zinc-500">
+        <strong>Important:</strong> Never put secrets (DB passwords, API keys,
+        JWT secrets) under NEXT_PUBLIC_. They will leak to the browser.
+        Use env vars without the prefix for server-only access.
+      </p>
+
+      <Link href="/">Go Home</Link>
+    </main>
+  );
+}
+```
+
+---
+
+## 4. What I Should See
+
+**Running `npm run dev`:**
+
+- **Env page** (`/env`) → Shows "NEXT_PUBLIC_APP_NAME: My App" (or whatever is set in the `.env` file). The private vars are not shown (they would cause a build error if accessed from a client component).
+
+- **Terminal output** from `next dev` shows `process.env` values for both public and private vars (private vars are visible in the terminal but not bundled to the browser).
+
+**`next build` output:**
+```
+✓ Compiled successfully in 338ms
+✓ Deployment assets generated
+○  (Static) prerendered as static content where applicable
+```
+
+The build process extracts environment variables and makes them available. The `next start` command serves the compiled app.
+
+---
+
+## 5. In a Real Multi-tenant E-commerce Platform
+
+- **Vercel deployment**: The multi-tenant app is deployed to Vercel. Each tenant's hostname (e.g., `store1.example.com`, `store2.example.com`) is configured as a custom domain in Vercel. The middleware extracts the tenant from the hostname, and the app serves the correct tenant's data.
+
+- **Standalone output**: The app uses `output: 'standalone'` in `next.config.ts`. This generates a `.next/standalone/` folder that can be deployed to any Node.js hosting (DigitalOcean, AWS, etc.) without needing the full `.next/` build artifacts. The `Dockerfile` uses the standalone output for consistency.
+
+- **Environment variables**: 
+  - `NEXT_PUBLIC_STORE_NAME` — exposed to the browser, shows the store's name in the footer.
+  - `DATABASE_URL` — only available on the server, used by the middleware, data fetches, and API routes.
+  - `JWT_SECRET` — only on the server, used for signing session cookies. Never committed to the repository (added to `.env.local` which is gitignored).
+
+- **Docker deployment**: The Dockerfile is used to deploy the app to a VPS (DigitalOcean, AWS EC2). The container runs `next start` on port 3000. The middleware extracts the tenant from the hostname, and all data layer queries are scoped by tenant.
+
+- **Self-hosting with PM2**: On a self-managed server, `next start` is run with PM2 process manager (`pm2 start npm -- start`). PM2 handles restarts, logging, and clustering. The app listens on port 3000 behind a reverse proxy (Nginx or Caddy).
+
+- **CI/CD pipeline**: 
+  - Push to `main` branch → Vercel triggers `next build` → serves the new version.
+  - Pull request → Vercel preview deployment → Lighthouse performance test → comments on PR with score.
+  - Tag release (e.g., `v1.2.0`) → Docker image built and pushed to registry → deployed to production VPS.
+
+- **Zero-downtime deployments**: With Vercel, deploys are automatic and instant. With self-hosting, PM2's `pm2 reload all --silent` swaps the old and new processes without dropping active connections.
+
+---
+
+## 6. When to Use It and When NOT to
+
+| Use `next build` + `next start` When | Avoid When |
+|--------------------------------------|------------|
+| You need a quick production setup without external services | You need auto-scaling, global CDN, or zero-downtime deploys |
+| You're familiar with Node.js server management | You want a fully managed platform |
+
+| Use Standalone Output When | Avoid When |
+|----------------------------|------------|
+| You want to deploy to any Node.js host (DigitalOcean, AWS, self-managed) | You're deploying to Vercel/Netlify (they use their own runtime) |
+| You need the smallest possible deployment package | You want the simplest setup (just `next start` on `.next/`) |
+
+| Use Docker When | Avoid When |
+|----------------|------------|
+| You want consistent environments (dev, staging, prod all use same image) | You want the simplest deployment (just `next start`) |
+| You're already using container orchestration (Kubernetes, ECS, Docker Swarm) | You're running a single small VPS without Docker |
+| You need isolation of Node.js version and dependencies | You have a very simple app with no external deps |
+
+| Use Vercel When | Avoid When |
+|----------------|------------|
+| You want zero-config deployment (connect GitHub, auto-deploy) | You need fine-grained server control (custom Node.js middleware, specific OS packages) |
+| You want automatic preview deployments on PRs | You're restricted to a specific hosting provider or on-premises |
+| You want built-in analytics, Lighthouse CI, and edge functions | Your budget is extremely limited (Vercel free tier has limits) |
+
+**Key rule:** For most side projects and startups, **Vercel** is the easiest path. For enterprises with compliance requirements or specific infrastructure needs, **Docker + self-hosting** gives full control. `next start` on `.next/` is a middle ground for simple production use.
+
+---
+
+## 7. Common Mistakes
+
+1. **Forgetting to run `next build` before `next start`** — `next start` expects the `.next/` folder to exist from a previous `next build` run. Without it, the server won't start.
+
+2. **Using `NEXT_PUBLIC_` for secrets** — Any variable with the `NEXT_PUBLIC_` prefix is bundled into the client-side JavaScript. Database passwords, API secrets, and JWT keys must use env vars **without** the prefix.
+
+3. **Not adding `images.domains` to `next.config.ts`** — If you use external image URLs in `next/image`, you must add the domain to the `images.domains` array. Without this, the build fails with "Unknown domain".
+
+4. **Not setting `output: 'standalone'` for Docker/self-hosting** — If you want to run `next start` without the full `.next/` folder (e.g., in Docker), you must set `output: 'standalone'` in `next.config.ts`. Without it, the standalone output doesn't include the necessary server files.
+
+5. **Committing `.env.local` or `.env.production` to git** — Environment variable files with secrets should always be in `.gitignore`. Only `.env.example` (without values) should be committed.
+
+6. **Not securing the production server** — When self-hosting, make sure to:
+   - Use a reverse proxy (Nginx/Caddy) with HTTPS (Let's Encrypt)
+   - Set appropriate HTTP security headers
+   - Keep the Node.js version updated
+   - Use a process manager (PM2/systemd) for restarts
+
+7. **Not setting `output: 'standalone'` and then wondering why Docker image is huge** — Without `output: 'standalone'`, the Docker image includes the entire `.next/` folder (build artifacts, source maps, etc.). With it, the image is much smaller (only the compiled app + runtime).
+
+8. **Ignoring the difference between `.env`, `.env.local`, and `.env.production`**:
+   - `.env` — shared by all environments (commit to git OK if no secrets)
+   - `.env.local` — local development only (gitignored, contains secrets)
+   - `.env.production` — production only (gitignored, contains secrets)
+
+---
+
+## 8. Try it Yourself
+
+1. **Run `next build`**: Run `npm run build` and observe the `.next/` folder being created.
+
+2. **Run `next start`**: Run `npm run start` and observe the production server starting on port 3000. Visit `http://localhost:3000/` to verify it works.
+
+3. **Add `output: 'standalone'`**: Add `output: 'standalone'` to `next.config.ts`, run `npm run build`, then run `npm run start`. Observe it works without the `.next/` folder being necessary (the standalone output has its own server).
+
+4. **Set environment variables**: Add `NEXT_PUBLIC_APP_NAME=My Store` to a `.env.local` file (create the file if it doesn't exist), then visit `/env` and observe the public variable is accessible.
+
+5. **Create a Dockerfile**: Create a `dockerfile` in the project root and build/run the Docker image.
+
+**Hint for exercise 3:** After adding `output: 'standalone'` and running `npm run build`, the `.next/standalone/` folder will contain `server.js`, `package.json`, and other necessary files. You can then run `npm run start` (which calls `node server.js`) without the `.next/` folder present.
+
+---
+
+## 9. Next: Real-World Patterns
+
+[→ docs/15-realworld.md](docs/15-realworld.md)
+
+**What's coming:** An admin customers table (server fetch plus a client Ant Design table, with pagination and filters stored in `searchParams`), a protected dashboard layout, a mutation with a Server Action and revalidation, a tenant-aware storefront, with the pitfalls of each.
